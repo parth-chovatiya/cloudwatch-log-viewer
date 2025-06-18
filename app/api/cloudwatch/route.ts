@@ -26,55 +26,114 @@ function getClient() {
   });
 }
 
+function getFriendlyAWSError(err: unknown) {
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    ("name" in err || "__type" in err)
+  ) {
+    const name = (err as { name?: string; __type?: string }).name;
+    const type = (err as { name?: string; __type?: string }).__type;
+    if (
+      name === "UnrecognizedClientException" ||
+      type === "UnrecognizedClientException" ||
+      name === "InvalidSignatureException" ||
+      type === "InvalidSignatureException"
+    ) {
+      return "AWS credentials are invalid. Please check your configuration.";
+    }
+    if (name === "AccessDeniedException" || type === "AccessDeniedException") {
+      return "Access denied. Please check your AWS permissions.";
+    }
+  }
+  return null;
+}
+
 // GET - Fetch log groups
 export async function GET() {
-  const client = getClient();
-  let logGroups: LogGroup[] = [];
-  let nextToken: string | undefined = undefined;
+  try {
+    const client = getClient();
+    let logGroups: LogGroup[] = [];
+    let nextToken: string | undefined = undefined;
 
-  do {
-    const data: DescribeLogGroupsCommandOutput = await client.send(
-      new DescribeLogGroupsCommand({ limit: 50, nextToken })
+    do {
+      const data: DescribeLogGroupsCommandOutput = await client.send(
+        new DescribeLogGroupsCommand({ limit: 50, nextToken })
+      );
+      logGroups = logGroups.concat(data.logGroups || []);
+      nextToken = data.nextToken;
+    } while (nextToken);
+
+    return NextResponse.json({ logGroups });
+  } catch (err: unknown) {
+    const friendly = getFriendlyAWSError(err);
+    if (friendly) {
+      return NextResponse.json({ error: friendly }, { status: 401 });
+    }
+    console.error("CloudWatch GET error:", err);
+    return NextResponse.json(
+      { error: "Failed to fetch log groups" },
+      { status: 500 }
     );
-    logGroups = logGroups.concat(data.logGroups || []);
-    nextToken = data.nextToken;
-  } while (nextToken);
-
-  return NextResponse.json({ logGroups });
+  }
 }
 
 // POST - Search logs
 export async function POST(req: NextRequest) {
-  const {
-    logGroupName,
-    logStreamName,
-    filterPattern,
-    startTime,
-    endTime,
-    limit,
-  } = await req.json();
-  const client = getClient();
+  try {
+    const {
+      logGroupName,
+      logStreamName,
+      filterPattern,
+      startTime,
+      endTime,
+      limit,
+    } = await req.json();
+    const client = getClient();
 
-  const params: FilterLogEventsCommandInput = {
-    logGroupName,
-    limit: limit || 100,
-    ...(logStreamName && { logStreamNames: [logStreamName] }),
-    ...(filterPattern && { filterPattern }),
-    ...(startTime && { startTime: Number(startTime) }),
-    ...(endTime && { endTime: Number(endTime) }),
-  };
+    const params: FilterLogEventsCommandInput = {
+      logGroupName,
+      limit: limit && limit <= 10000 ? limit : 100,
+      ...(logStreamName && { logStreamNames: [logStreamName] }),
+      ...(filterPattern && { filterPattern }),
+      ...(startTime && { startTime: Number(startTime) }),
+      ...(endTime && { endTime: Number(endTime) }),
+    };
 
-  const data = await client.send(new FilterLogEventsCommand(params));
-  return NextResponse.json({ events: data.events || [] });
+    const data = await client.send(new FilterLogEventsCommand(params));
+    return NextResponse.json({ events: data.events || [] });
+  } catch (err: unknown) {
+    const friendly = getFriendlyAWSError(err);
+    if (friendly) {
+      return NextResponse.json({ error: friendly }, { status: 401 });
+    }
+    console.error("CloudWatch POST error:", err);
+    return NextResponse.json(
+      { error: "Failed to search logs" },
+      { status: 500 }
+    );
+  }
 }
 
 // PUT - Fetch log streams for a group
 export async function PUT(req: NextRequest) {
-  const { logGroupName } = await req.json();
-  const client = getClient();
+  try {
+    const { logGroupName } = await req.json();
+    const client = getClient();
 
-  const data = await client.send(
-    new DescribeLogStreamsCommand({ logGroupName, limit: 50 })
-  );
-  return NextResponse.json({ logStreams: data.logStreams || [] });
+    const data = await client.send(
+      new DescribeLogStreamsCommand({ logGroupName, limit: 50 })
+    );
+    return NextResponse.json({ logStreams: data.logStreams || [] });
+  } catch (err: unknown) {
+    const friendly = getFriendlyAWSError(err);
+    if (friendly) {
+      return NextResponse.json({ error: friendly }, { status: 401 });
+    }
+    console.error("CloudWatch PUT error:", err);
+    return NextResponse.json(
+      { error: "Failed to fetch log streams" },
+      { status: 500 }
+    );
+  }
 }

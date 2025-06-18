@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Combobox } from "@headlessui/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useDebounce, formatTimestamp, exportLogs } from "./utils";
 
 interface LogEvent {
   timestamp: number;
@@ -38,16 +39,6 @@ interface LogStream {
   storedBytes?: number;
 }
 
-// Debounce hook
-const useDebounce = (value: string, delay = 300) => {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-  useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(handler);
-  }, [value, delay]);
-  return debouncedValue;
-};
-
 export default function CloudWatchLogViewer() {
   const [logGroups, setLogGroups] = useState<LogGroup[]>([]);
   const [logStreams, setLogStreams] = useState<LogStream[]>([]);
@@ -68,6 +59,12 @@ export default function CloudWatchLogViewer() {
   const debouncedLogGroupQuery = useDebounce(logGroupQuery, 300);
   const debouncedLogStreamQuery = useDebounce(logStreamQuery, 300);
 
+  // Add state for open and active index for both dropdowns
+  const [logGroupOpen, setLogGroupOpen] = useState(false);
+  const [logGroupActiveIndex, setLogGroupActiveIndex] = useState(0);
+  const [logStreamOpen, setLogStreamOpen] = useState(false);
+  const [logStreamActiveIndex, setLogStreamActiveIndex] = useState(0);
+
   // Fetch log groups on mount
   useEffect(() => {
     fetchLogGroups();
@@ -82,6 +79,66 @@ export default function CloudWatchLogViewer() {
       setSelectedLogStream("");
     }
   }, [selectedLogGroup]);
+
+  // Filtered log groups for search (debounced)
+  const filteredLogGroups =
+    debouncedLogGroupQuery === ""
+      ? logGroups
+      : logGroups.filter((group) =>
+          group.logGroupName
+            .toLowerCase()
+            .includes(debouncedLogGroupQuery.toLowerCase())
+        );
+
+  // Filtered log streams for search (debounced)
+  const filteredLogStreams =
+    debouncedLogStreamQuery === ""
+      ? logStreams
+      : logStreams.filter((stream) =>
+          stream.logStreamName
+            .toLowerCase()
+            .includes(debouncedLogStreamQuery.toLowerCase())
+        );
+
+  // Virtualizer for log groups
+  const parentRefLogGroup = useRef<HTMLDivElement>(null);
+  const logGroupVirtualizer = useVirtualizer({
+    count: filteredLogGroups.length,
+    getScrollElement: () => parentRefLogGroup.current,
+    estimateSize: () => 40,
+    overscan: 5,
+  });
+
+  // Virtualizer for log streams
+  const parentRefLogStream = useRef<HTMLDivElement>(null);
+  const logStreamVirtualizer = useVirtualizer({
+    count: filteredLogStreams.length,
+    getScrollElement: () => parentRefLogStream.current,
+    estimateSize: () => 40,
+    overscan: 5,
+  });
+
+  // Scroll to active index when dropdown opens or active index changes (log group)
+  useEffect(() => {
+    if (
+      logGroupOpen &&
+      parentRefLogGroup.current &&
+      filteredLogGroups.length > 0
+    ) {
+      logGroupVirtualizer.scrollToIndex(logGroupActiveIndex);
+    }
+  }, [logGroupOpen, logGroupActiveIndex, filteredLogGroups.length]);
+
+  // Scroll to active index when dropdown opens or active index changes (log stream)
+  useEffect(() => {
+    if (
+      logStreamOpen &&
+      parentRefLogStream.current &&
+      filteredLogStreams.length > 0
+    ) {
+      logStreamVirtualizer.scrollToIndex(logStreamActiveIndex);
+    }
+  }, [logStreamOpen, logStreamActiveIndex, filteredLogStreams.length]);
 
   const fetchLogGroups = async () => {
     setLoading(true);
@@ -150,58 +207,6 @@ export default function CloudWatchLogViewer() {
       setLoading(false);
     }
   };
-
-  const formatTimestamp = (timestamp: number) => {
-    return new Date(timestamp).toLocaleString();
-  };
-
-  const exportLogs = () => {
-    const dataStr = JSON.stringify(logEvents, null, 2);
-    const dataBlob = new Blob([dataStr], { type: "application/json" });
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `cloudwatch-logs-${Date.now()}.json`;
-    link.click();
-  };
-
-  // Filtered log groups for search (debounced)
-  const filteredLogGroups =
-    debouncedLogGroupQuery === ""
-      ? logGroups
-      : logGroups.filter((group) =>
-          group.logGroupName
-            .toLowerCase()
-            .includes(debouncedLogGroupQuery.toLowerCase())
-        );
-
-  // Filtered log streams for search (debounced)
-  const filteredLogStreams =
-    debouncedLogStreamQuery === ""
-      ? logStreams
-      : logStreams.filter((stream) =>
-          stream.logStreamName
-            .toLowerCase()
-            .includes(debouncedLogStreamQuery.toLowerCase())
-        );
-
-  // Virtualizer for log groups
-  const parentRefLogGroup = useRef<HTMLDivElement>(null);
-  const logGroupVirtualizer = useVirtualizer({
-    count: filteredLogGroups.length,
-    getScrollElement: () => parentRefLogGroup.current,
-    estimateSize: () => 40,
-    overscan: 5,
-  });
-
-  // Virtualizer for log streams
-  const parentRefLogStream = useRef<HTMLDivElement>(null);
-  const logStreamVirtualizer = useVirtualizer({
-    count: filteredLogStreams.length,
-    getScrollElement: () => parentRefLogStream.current,
-    estimateSize: () => 40,
-    overscan: 5,
-  });
 
   // Add a clear filters function
   const clearFilters = () => {
@@ -277,8 +282,28 @@ export default function CloudWatchLogViewer() {
                         }
                         placeholder="Search log groups..."
                         autoComplete="off"
+                        onFocus={() => setLogGroupOpen(true)}
+                        onBlur={() =>
+                          setTimeout(() => setLogGroupOpen(false), 100)
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "ArrowDown") {
+                            setLogGroupOpen(true);
+                            setLogGroupActiveIndex((prev) =>
+                              Math.min(prev + 1, filteredLogGroups.length - 1)
+                            );
+                          } else if (e.key === "ArrowUp") {
+                            setLogGroupOpen(true);
+                            setLogGroupActiveIndex((prev) =>
+                              Math.max(prev - 1, 0)
+                            );
+                          }
+                        }}
                       />
-                      <Combobox.Button className="absolute inset-y-0 right-0 flex items-center pr-3">
+                      <Combobox.Button
+                        className="absolute inset-y-0 right-0 flex items-center pr-3"
+                        onClick={() => setLogGroupOpen((open) => !open)}
+                      >
                         <ChevronDown className="h-5 w-5 text-gray-400" />
                       </Combobox.Button>
                       <Combobox.Options className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-lg bg-white py-1 text-base shadow-xl ring-1 ring-black ring-opacity-10 focus:outline-none sm:text-sm border border-gray-200">
@@ -321,8 +346,11 @@ export default function CloudWatchLogViewer() {
                                             : "text-gray-900"
                                         }`
                                       }
+                                      onMouseEnter={() =>
+                                        setLogGroupActiveIndex(virtualRow.index)
+                                      }
                                     >
-                                      {({ selected, active }) => (
+                                      {({ selected }) => (
                                         <>
                                           <span
                                             className={`block truncate ${
@@ -334,13 +362,7 @@ export default function CloudWatchLogViewer() {
                                             {group.logGroupName}
                                           </span>
                                           {selected ? (
-                                            <span
-                                              className={`absolute inset-y-0 right-0 flex items-center pr-4 ${
-                                                active
-                                                  ? "text-white"
-                                                  : "text-blue-600"
-                                              }`}
-                                            >
+                                            <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600">
                                               ✓
                                             </span>
                                           ) : null}
@@ -405,8 +427,28 @@ export default function CloudWatchLogViewer() {
                         placeholder="Search log streams..."
                         disabled={!selectedLogGroup}
                         autoComplete="off"
+                        onFocus={() => setLogStreamOpen(true)}
+                        onBlur={() =>
+                          setTimeout(() => setLogStreamOpen(false), 100)
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "ArrowDown") {
+                            setLogStreamOpen(true);
+                            setLogStreamActiveIndex((prev) =>
+                              Math.min(prev + 1, filteredLogStreams.length - 1)
+                            );
+                          } else if (e.key === "ArrowUp") {
+                            setLogStreamOpen(true);
+                            setLogStreamActiveIndex((prev) =>
+                              Math.max(prev - 1, 0)
+                            );
+                          }
+                        }}
                       />
-                      <Combobox.Button className="absolute inset-y-0 right-0 flex items-center pr-3">
+                      <Combobox.Button
+                        className="absolute inset-y-0 right-0 flex items-center pr-3"
+                        onClick={() => setLogStreamOpen((open) => !open)}
+                      >
                         <ChevronDown className="h-5 w-5 text-gray-400" />
                       </Combobox.Button>
                       <Combobox.Options className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-lg bg-white py-1 text-base shadow-xl ring-1 ring-black ring-opacity-10 focus:outline-none sm:text-sm border border-gray-200">
@@ -449,8 +491,13 @@ export default function CloudWatchLogViewer() {
                                             : "text-gray-900"
                                         }`
                                       }
+                                      onMouseEnter={() =>
+                                        setLogStreamActiveIndex(
+                                          virtualRow.index
+                                        )
+                                      }
                                     >
-                                      {({ selected, active }) => (
+                                      {({ selected }) => (
                                         <>
                                           <span
                                             className={`block truncate ${
@@ -462,13 +509,7 @@ export default function CloudWatchLogViewer() {
                                             {stream.logStreamName}
                                           </span>
                                           {selected ? (
-                                            <span
-                                              className={`absolute inset-y-0 right-0 flex items-center pr-4 ${
-                                                active
-                                                  ? "text-white"
-                                                  : "text-blue-600"
-                                              }`}
-                                            >
+                                            <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600">
                                               ✓
                                             </span>
                                           ) : null}
@@ -574,7 +615,7 @@ export default function CloudWatchLogViewer() {
                 {logEvents.length > 0 && (
                   <button
                     type="button"
-                    onClick={exportLogs}
+                    onClick={() => exportLogs(logEvents)}
                     className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 flex items-center gap-2 text-base shadow-md transition-all"
                   >
                     <Download className="w-5 h-5" />
